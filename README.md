@@ -108,3 +108,4 @@ Ragas faithfulness score > **0.80** on the test question set.
 | Evaluation run (8 questions) | ~$0.01 |
 
 Total for all of Phase 1: **under $1**
+# DevMind Test
