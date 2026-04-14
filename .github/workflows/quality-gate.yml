@@ -24,6 +24,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Build Vector Store
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python rag/ingest.py
+
       - name: Run Ragas Evaluation
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
