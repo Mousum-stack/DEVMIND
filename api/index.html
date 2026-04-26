@@ -2,20 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <title>DevMind</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 .sidebar{width:260px;background:white;border-right:1px solid #eee;display:flex;flex-direction:column;transition:width 0.2s;overflow:hidden;flex-shrink:0;}
 .sidebar.closed{width:0;border:none;}
-.sb-head{padding:14px 16px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;}
+.sb-head{padding:12px;border-bottom:1px solid #eee;display:flex;flex-direction:column;gap:8px;}
+.sb-top{display:flex;align-items:center;justify-content:space-between;}
 .sb-title{font-size:13px;font-weight:600;color:#333;white-space:nowrap;}
+.new-chat-btn{width:100%;padding:8px;background:#667eea;color:white;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;text-align:center;}
+.new-chat-btn:hover{background:#5a6fd6;}
 .sb-list{flex:1;overflow-y:auto;padding:8px;}
-.h-item{padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:4px;border:1px solid transparent;}
+.sb-section{font-size:10px;color:#aaa;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;padding:6px 4px 4px;}
+.h-item{padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:3px;border:1px solid transparent;}
 .h-item:hover{background:#f9f9f9;border-color:#eee;}
 .h-item.active{background:#f0f0ff;border-color:#ddd;}
 .h-q{font-size:12px;font-weight:500;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.h-t{font-size:11px;color:#999;margin-top:2px;}
+.h-t{font-size:10px;color:#aaa;margin-top:2px;}
 .main{flex:1;display:flex;flex-direction:column;min-width:0;}
 .topbar{padding:10px 16px;background:white;border-bottom:1px solid #eee;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .tog{width:28px;height:28px;border:1px solid #ddd;border-radius:6px;background:white;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
@@ -67,6 +72,8 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 .modal-cancel{padding:8px 16px;border:1px solid #ddd;border-radius:8px;font-size:13px;cursor:pointer;background:white;}
 .modal-add{padding:8px 16px;background:#667eea;color:white;border:none;border-radius:8px;font-size:13px;cursor:pointer;}
 .status-msg{font-size:12px;color:#667eea;margin-top:6px;min-height:18px;}
+.chat-session{display:none;}
+.chat-session.active{display:flex;flex-direction:column;gap:12px;}
 </style>
 </head>
 <body>
@@ -74,12 +81,17 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 
 <div class="sidebar" id="sb">
   <div class="sb-head">
-    <span class="sb-title">Chat history</span>
-    <button class="tog" onclick="toggle()">
-      <div class="tog-icon"><span></span><span></span><span></span></div>
-    </button>
+    <div class="sb-top">
+      <span class="sb-title">DevMind</span>
+      <button class="tog" onclick="toggle()">
+        <div class="tog-icon"><span></span><span></span><span></span></div>
+      </button>
+    </div>
+    <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
   </div>
-  <div class="sb-list" id="hist"></div>
+  <div class="sb-list" id="hist">
+    <div class="sb-section">Recent chats</div>
+  </div>
 </div>
 
 <div class="main">
@@ -89,25 +101,14 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
     </button>
     <span class="brand">Dev<span>Mind</span></span>
     <div class="dot"></div>
-    <span class="online">online</span>
+    <span class="online" id="chatLabel">New chat</span>
     <select class="project-select" id="projectSelect" onchange="onProjectChange()">
       <option value="">Loading...</option>
     </select>
     <button class="add-btn" onclick="openModal()">+ Add codebase</button>
   </div>
 
-  <div class="chat" id="chat">
-    <div class="empty" id="empty">
-      <div class="empty-title">Ask your codebase anything</div>
-      <div class="empty-sub">Select a project above and start asking</div>
-      <div class="chips">
-        <div class="chip" onclick="fill('How does dependency injection work?')">Dependency injection</div>
-        <div class="chip" onclick="fill('What is the routing system?')">Routing</div>
-        <div class="chip" onclick="fill('How does request validation work?')">Request validation</div>
-        <div class="chip" onclick="fill('How do you add middleware?')">Middleware</div>
-      </div>
-    </div>
-  </div>
+  <div class="chat" id="chat"></div>
 
   <div class="input-area">
     <div class="irow">
@@ -120,8 +121,8 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 <div class="modal-bg" id="modalBg">
   <div class="modal">
     <h3>Add a new codebase</h3>
-    <input id="repoUrl" placeholder="GitHub URL e.g. https://github.com/django/django" />
-    <input id="repoName" placeholder="Project name e.g. django" />
+    <input id="repoUrl" placeholder="GitHub URL e.g. https://github.com/django/django"/>
+    <input id="repoName" placeholder="Project name e.g. django"/>
     <div class="status-msg" id="statusMsg"></div>
     <div class="modal-btns">
       <button class="modal-cancel" onclick="closeModal()">Cancel</button>
@@ -135,6 +136,77 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 let sidebarOpen=true;
 let currentProject='';
 let pollInterval=null;
+let sessions={};
+let currentSessionId=null;
+let sessionCounter=0;
+
+function genId(){return 'session_'+(++sessionCounter)+'_'+Date.now();}
+
+function newChat(){
+  const id=genId();
+  sessions[id]={id,title:'New chat',messages:[],time:new Date()};
+  currentSessionId=id;
+  renderChat();
+  document.getElementById('chatLabel').textContent='New chat';
+  document.getElementById('qi').focus();
+  refreshHistory();
+}
+
+function renderChat(){
+  const chat=document.getElementById('chat');
+  chat.innerHTML='';
+  if(!currentSessionId||!sessions[currentSessionId]||sessions[currentSessionId].messages.length===0){
+    chat.innerHTML=`
+      <div class="empty" id="empty">
+        <div class="empty-title">Ask your codebase anything</div>
+        <div class="empty-sub">Select a project and start asking</div>
+        <div class="chips">
+          <div class="chip" onclick="fill('How does dependency injection work?')">Dependency injection</div>
+          <div class="chip" onclick="fill('What is the routing system?')">Routing</div>
+          <div class="chip" onclick="fill('How does request validation work?')">Request validation</div>
+          <div class="chip" onclick="fill('How do you add middleware?')">Middleware</div>
+        </div>
+      </div>`;
+    return;
+  }
+  sessions[currentSessionId].messages.forEach(msg=>{
+    if(msg.type==='user'){
+      const d=document.createElement('div');
+      d.className='msg-user';
+      d.innerHTML=`<div class="u-bubble">${msg.text}</div>`;
+      chat.appendChild(d);
+    } else {
+      const d=document.createElement('div');
+      d.className='msg-ai';
+      let m='',s='';
+      if(msg.metrics && msg.metrics.total_time > 0)m=`<div class="metrics"><span class="pill">retrieval ${msg.metrics.retrieval_time}s</span><span class="pill">generation ${msg.metrics.generation_time}s</span><span class="pill">total ${msg.metrics.total_time}s</span><span class="pill">${msg.metrics.chunks_used} chunks</span></div>`;
+      if(msg.sources&&msg.sources.length)s=`<div class="sources">Sources: ${[...new Set(msg.sources.map(x=>x.split('/').pop()))].map(x=>`<span class="stag">${x}</span>`).join('')}</div>`;
+      d.innerHTML=`<div class="avatar">DM</div><div class="ai-body"><div class="a-bubble">${typeof marked!=='undefined'?marked.parse(msg.answer):msg.answer}</div>${m}${s}</div>`;
+      chat.appendChild(d);
+    }
+  });
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function refreshHistory(){
+  const hist=document.getElementById('hist');
+  hist.innerHTML='<div class="sb-section">Recent chats</div>';
+  Object.values(sessions).reverse().forEach(s=>{
+    const d=document.createElement('div');
+    d.className='h-item'+(s.id===currentSessionId?' active':'');
+    d.onclick=()=>loadSession(s.id);
+    const t=s.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    d.innerHTML=`<div class="h-q">${s.title}</div><div class="h-t">${currentProject} • ${t}</div>`;
+    hist.appendChild(d);
+  });
+}
+
+function loadSession(id){
+  currentSessionId=id;
+  document.getElementById('chatLabel').textContent=sessions[id].title;
+  renderChat();
+  refreshHistory();
+}
 
 async function loadProjects(){
   try{
@@ -142,10 +214,7 @@ async function loadProjects(){
     const d=await res.json();
     const sel=document.getElementById('projectSelect');
     sel.innerHTML='';
-    if(d.projects.length===0){
-      sel.innerHTML='<option value="">No projects yet</option>';
-      return;
-    }
+    if(d.projects.length===0){sel.innerHTML='<option value="">No projects yet</option>';return;}
     d.projects.forEach(p=>{
       const o=document.createElement('option');
       o.value=p.name;
@@ -159,9 +228,7 @@ async function loadProjects(){
   }catch(e){console.error(e);}
 }
 
-function onProjectChange(){
-  currentProject=document.getElementById('projectSelect').value;
-}
+function onProjectChange(){currentProject=document.getElementById('projectSelect').value;}
 
 function toggle(){
   sidebarOpen=!sidebarOpen;
@@ -186,17 +253,10 @@ function closeModal(){
 async function addCodebase(){
   const url=document.getElementById('repoUrl').value.trim();
   const name=document.getElementById('repoName').value.trim().toLowerCase().replace(/\s+/g,'_');
-  if(!url||!name){
-    document.getElementById('statusMsg').textContent='Please fill both fields.';
-    return;
-  }
+  if(!url||!name){document.getElementById('statusMsg').textContent='Please fill both fields.';return;}
   document.getElementById('statusMsg').textContent='Starting...';
   try{
-    const res=await fetch('/add-codebase',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({github_url:url,project_name:name})
-    });
+    const res=await fetch('/add-codebase',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({github_url:url,project_name:name})});
     const d=await res.json();
     document.getElementById('statusMsg').textContent=d.message;
     pollInterval=setInterval(async()=>{
@@ -213,76 +273,51 @@ async function addCodebase(){
         clearInterval(pollInterval);pollInterval=null;
       }
     },3000);
-  }catch(e){
-    document.getElementById('statusMsg').textContent='Error: '+e.message;
-  }
+  }catch(e){document.getElementById('statusMsg').textContent='Error: '+e.message;}
 }
 
 async function ask(){
   const qi=document.getElementById('qi');
   const q=qi.value.trim();
   if(!q)return;
-  if(!currentProject){
-    alert('Please select a project first!');
-    return;
-  }
+  if(!currentProject){alert('Please select a project first!');return;}
+  if(!currentSessionId)newChat();
   qi.value='';
   document.getElementById('empty')?.remove();
   document.getElementById('askbtn').textContent='...';
-  addUser(q);addThinking();
+
+  sessions[currentSessionId].messages.push({type:'user',text:q});
+  if(sessions[currentSessionId].title==='New chat')sessions[currentSessionId].title=q.slice(0,40);
+  document.getElementById('chatLabel').textContent=sessions[currentSessionId].title;
+  renderChat();
+  addThinking();
+
   try{
-    const res=await fetch('/query',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({question:q,project:currentProject})
-    });
+    const res=await fetch('/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,project:currentProject})});
     const d=await res.json();
-    removeThinking();addAI(d.answer,d.metrics,d.sources);addHist(q);
+    removeThinking();
+    sessions[currentSessionId].messages.push({type:'ai',answer:d.answer,metrics:d.metrics,sources:d.sources});
+    renderChat();
+    refreshHistory();
   }catch(e){
-    removeThinking();addAI('Error connecting to backend.',null,[]);
+    removeThinking();
+    sessions[currentSessionId].messages.push({type:'ai',answer:'Error connecting to backend.',metrics:null,sources:[]});
+    renderChat();
   }
   document.getElementById('askbtn').textContent='Ask';
 }
 
-function addUser(t){
-  const c=document.getElementById('chat');
-  const d=document.createElement('div');
-  d.className='msg-user';
-  d.innerHTML=`<div class="u-bubble">${t}</div>`;
-  c.appendChild(d);c.scrollTop=c.scrollHeight;
-}
-
 function addThinking(){
-  const c=document.getElementById('chat');
+  const chat=document.getElementById('chat');
   const d=document.createElement('div');
   d.className='msg-ai';d.id='thinking';
   d.innerHTML=`<div class="avatar">DM</div><div class="ai-body"><div class="thinking"><div class="td"></div><div class="td"></div><div class="td"></div></div></div>`;
-  c.appendChild(d);c.scrollTop=c.scrollHeight;
+  chat.appendChild(d);chat.scrollTop=chat.scrollHeight;
 }
 
 function removeThinking(){document.getElementById('thinking')?.remove();}
 
-function addAI(ans,metrics,sources){
-  const c=document.getElementById('chat');
-  const d=document.createElement('div');
-  d.className='msg-ai';
-  let m='',s='';
-  if(metrics)m=`<div class="metrics"><span class="pill">retrieval ${metrics.retrieval_time}s</span><span class="pill">generation ${metrics.generation_time}s</span><span class="pill">total ${metrics.total_time}s</span><span class="pill">${metrics.chunks_used} chunks</span></div>`;
-  if(sources&&sources.length)s=`<div class="sources">Sources: ${sources.map(x=>`<span class="stag">${x.split('/').pop()}</span>`).join('')}</div>`;
-  d.innerHTML=`<div class="avatar">DM</div><div class="ai-body"><div class="a-bubble">${ans}</div>${m}${s}</div>`;
-  c.appendChild(d);c.scrollTop=c.scrollHeight;
-}
-
-function addHist(q){
-  const h=document.getElementById('hist');
-  const d=document.createElement('div');
-  d.className='h-item active';
-  h.querySelectorAll('.h-item').forEach(x=>x.classList.remove('active'));
-  const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  d.innerHTML=`<div class="h-q">${q}</div><div class="h-t">${currentProject} • ${t}</div>`;
-  h.prepend(d);
-}
-
+newChat();
 loadProjects();
 </script>
 </body>

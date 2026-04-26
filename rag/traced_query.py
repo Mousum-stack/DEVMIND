@@ -1,15 +1,6 @@
 """
 DevMind - Phase 3: Traced Query
 File: rag/traced_query.py
-
-What this does:
-  1. Same as query.py but with Langfuse tracing
-  2. Every step gets tracked — retrieval time, LLM time, total time
-  3. Results show up in Langfuse dashboard in real-time
-  4. Track quality + performance over time
-
-Run with:
-  python rag/traced_query.py -q "Your question here"
 """
 
 import argparse
@@ -17,10 +8,7 @@ import time
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
 from langchain_groq import ChatGroq
-from langchain.schema import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langfuse.decorators import observe
 from langfuse import Langfuse
@@ -31,8 +19,6 @@ load_dotenv()
 langfuse_client = Langfuse()
 
 CHROMA_PATH  = "./data/chroma_db"
-TOP_K_VECTOR = 10
-TOP_K_BM25   = 10
 TOP_K_FINAL  = 5
 
 SYSTEM_PROMPT = """You are DevMind, an expert code assistant.
@@ -48,47 +34,38 @@ Context:
 # ─────────────────────────────────────────────────────────────────────────
 
 def load_retriever():
-    """Load hybrid retriever (same as query.py)."""
+    """Load vector retriever (fixed version)."""
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
     vectorstore = Chroma(
         persist_directory=CHROMA_PATH,
         embedding_function=embeddings,
         collection_name="devmind_code",
     )
+
     count = vectorstore._collection.count()
     print(f"  Loaded vector store: {count} chunks indexed")
 
-    vector_retriever = vectorstore.as_retriever(
+    retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": TOP_K_VECTOR}
+        search_kwargs={"k": TOP_K_FINAL}
     )
 
-    print("  Loading BM25...")
-    all_docs = vectorstore.get()
-    bm25_docs = [
-        Document(page_content=text, metadata=meta)
-        for text, meta in zip(all_docs["documents"], all_docs["metadatas"])
-    ]
-    bm25_retriever = BM25Retriever.from_documents(bm25_docs)
-    bm25_retriever.k = TOP_K_BM25
-
-    ensemble = EnsembleRetriever(
-        retrievers=[vector_retriever, bm25_retriever],
-        weights=[0.5, 0.5]
-    )
-    return ensemble
+    return retriever
 
 
 @observe()
 def trace_retrieval(question, retriever):
     """Trace retrieval step with Langfuse."""
     start = time.time()
+
     docs = retriever.invoke(question)
-    docs = docs[:TOP_K_FINAL]
+
     retrieval_time = time.time() - start
 
     context_parts = []
     cited_files = []
+
     for doc in docs:
         source = doc.metadata.get("source_file", "unknown")
         if source not in cited_files:
@@ -114,8 +91,13 @@ def trace_generation(question, context, llm):
         ("system", SYSTEM_PROMPT),
         ("human", "{question}"),
     ])
+
     chain = prompt | llm
-    response = chain.invoke({"context": context, "question": question})
+
+    response = chain.invoke({
+        "context": context,
+        "question": question
+    })
 
     generation_time = time.time() - start
 
@@ -128,6 +110,7 @@ def trace_generation(question, context, llm):
 @observe()
 def trace_ask(question, retriever, llm):
     """Main traced function — orchestrates retrieval + generation."""
+
     print(f"\n🔍 Retrieving context...")
     retrieval_result = trace_retrieval(question, retriever)
 
@@ -138,7 +121,10 @@ def trace_ask(question, retriever, llm):
         llm
     )
 
-    total_time = retrieval_result["retrieval_time"] + generation_result["generation_time"]
+    total_time = (
+        retrieval_result["retrieval_time"] +
+        generation_result["generation_time"]
+    )
 
     return {
         "question": question,
@@ -153,11 +139,18 @@ def trace_ask(question, retriever, llm):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--question", "-q", type=str,
-        default="How does FastAPI handle dependency injection?")
-    parser.add_argument("--model", "-m", type=str,
+    parser.add_argument(
+        "--question", "-q",
+        type=str,
+        default="How does FastAPI handle dependency injection?"
+    )
+    parser.add_argument(
+        "--model", "-m",
+        type=str,
         default="llama-3.3-70b-versatile",
-        help="Groq model to use")
+        help="Groq model to use"
+    )
+
     args = parser.parse_args()
 
     print("=" * 70)
@@ -177,7 +170,8 @@ def main():
     print("=" * 70)
     print(f"\n❓ QUESTION: {result['question']}\n")
     print(f"📝 ANSWER:\n{result['answer']}\n")
-    print(f"📁 SOURCES:")
+
+    print("📁 SOURCES:")
     for f in result["cited_files"]:
         print(f"   - {f}\n")
 
@@ -191,8 +185,9 @@ def main():
     print("\n  📊 View full trace at: https://us.cloud.langfuse.com")
     print("=" * 70)
 
-    # Flush Langfuse to send all traces
+    # ✅ CRITICAL FIX (Langfuse flush + delay)
     langfuse_client.flush()
+    time.sleep(2)
 
 
 if __name__ == "__main__":
