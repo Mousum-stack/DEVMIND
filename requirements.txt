@@ -9,3 +9,4 @@ chromadb
 huggingface-hub
 requests
 langchain-huggingface
+langchain-huggingface
