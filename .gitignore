@@ -1,0 +1,13 @@
+.venv/
+venv/
+.env
+data/chroma_db/
+data/fastapi/
+data/*.sqlite3
+models/
+__pycache__/
+*.pyc
+.DS_Store
+.env.local
+.env
+.env
