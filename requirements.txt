@@ -8,3 +8,4 @@ langchain-groq
 chromadb
 huggingface-hub
 requests
+langchain-huggingface
