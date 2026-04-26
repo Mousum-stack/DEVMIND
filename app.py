@@ -1,288 +1,146 @@
-import time
-import os
-import re
-import subprocess
-from pathlib import Path
-from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import List
+import time
+from dotenv import load_dotenv
 
-from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
-from langchain.schema import Document
-from langchain_community.document_loaders import TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-from langfuse.decorators import observe, langfuse_context
-from langfuse import Langfuse
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-langfuse = Langfuse(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_BASE_URL", "https://us.cloud.langfuse.com")
+app = FastAPI(title="DevMind API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-app = FastAPI()
-TOP_K_FINAL = 5
+CHROMA_PATH = "./data/chroma_db"
+TOP_K = 5
 
 SYSTEM_PROMPT = """You are DevMind, an expert code assistant.
 
-IMPORTANT RULES:
-- ALWAYS answer in English only.
-- Use ONLY the provided context to answer.
-- Cite the source file after every fact using [filename].
-- Format your answer in clear bullet points or numbered lists.
-- Use markdown headers (##) to organize long answers.
-- Format code in markdown code blocks.
-- Keep answers concise and structured like a professional assistant.
-- If context does not contain the answer say: I don't have enough context.
+FORMAT YOUR RESPONSE WITH:
+- Use **bold** for key concepts
+- Use numbered lists (1. 2. 3.)
+- Use dashes for bullet points
+- Add ### Headings for sections
+- Use ```python code blocks
+
+Use ONLY the provided context. If insufficient, say "I don't have enough context."
 
 Context:
 {context}
 """
 
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-retrievers = {}
-indexing_status = {}
-
-# ── Intent Detection ──────────────────────────────────────────────────────────
-
-GREETINGS = ["hi", "hello", "hey", "hii", "howdy", "sup",
-             "what's up", "good morning", "good evening", "good afternoon"]
-
-def detect_intent(question: str) -> str:
-    q = question.lower().strip()
-    if any(q == g or q.startswith(g + " ") or q.startswith(g + "!") for g in GREETINGS):
-        return "greeting"
-    if len(q.split()) <= 3 and not any(c in q for c in ["(", ".", "_", "/"]):
-        return "general"
-    return "rag"
-
-# ── Retriever ─────────────────────────────────────────────────────────────────
-
-def load_retriever(project_name: str, db_path: str):
-    if not Path(db_path).exists():
-        return None
-    print(f"Loading {project_name}...")
-    vectorstore = Chroma(
-        persist_directory=db_path,
-        embedding_function=embeddings,
-        collection_name="devmind_code",
-    )
-    bm25_docs = []
-    offset = 0
-    while True:
-        batch = vectorstore.get(limit=5000, offset=offset)
-        if not batch["documents"]:
-            break
-        for text, meta in zip(batch["documents"], batch["metadatas"]):
-            bm25_docs.append(Document(page_content=text, metadata=meta))
-        offset += 5000
-    if not bm25_docs:
-        return None
-    bm25_retriever = BM25Retriever.from_documents(bm25_docs)
-    bm25_retriever.k = 10
-    vector_retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 10}
-    )
-    ensemble = EnsembleRetriever(
-        retrievers=[vector_retriever, bm25_retriever],
-        weights=[0.5, 0.5]
-    )
-    print(f"Loaded {project_name} — {len(bm25_docs)} chunks")
-    return ensemble
-
-
-def index_repo(github_url: str, project_name: str):
-    try:
-        indexing_status[project_name] = "cloning"
-        clone_path = f"./data/{project_name}_source"
-        db_path    = f"./data/{project_name}_db"
-        if not Path(clone_path).exists():
-            subprocess.run(
-                ["git", "clone", "--depth=1", github_url, clone_path],
-                check=True, capture_output=True
-            )
-        indexing_status[project_name] = "indexing"
-        repo = Path(clone_path)
-        docs = []
-        for ext in [".py", ".md"]:
-            for f in repo.rglob(f"*{ext}"):
-                try:
-                    loader = TextLoader(str(f), encoding="utf-8")
-                    d = loader.load()
-                    for doc in d:
-                        doc.metadata["source_file"] = str(f.relative_to(repo))
-                        doc.metadata["project"]     = project_name
-                    docs.extend(d)
-                except:
-                    pass
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-        chunks   = splitter.split_documents(docs)
-        Chroma.from_documents(
-            chunks, embeddings,
-            persist_directory=db_path,
-            collection_name="devmind_code"
-        )
-        r = load_retriever(project_name, db_path)
-        if r:
-            retrievers[project_name] = r
-        indexing_status[project_name] = "ready"
-        print(f"Done {project_name} — {len(chunks)} chunks")
-    except Exception as e:
-        indexing_status[project_name] = f"error: {str(e)}"
-        print(f"Error: {e}")
-
-
-print("Loading existing projects...")
-data_dir = Path("./data")
-for item in data_dir.iterdir():
-    if item.is_dir() and item.name.endswith("_db"):
-        name = item.name.replace("_db", "")
-        r    = load_retriever(name, str(item))
-        if r:
-            retrievers[name]      = r
-            indexing_status[name] = "ready"
-print(f"Loaded: {list(retrievers.keys())}")
-
-
-# ── Models ────────────────────────────────────────────────────────────────────
-
 class QueryRequest(BaseModel):
     question: str
-    project:  str = "chroma"
+    model: str = "llama-3.3-70b-versatile"
 
-class AddRepoRequest(BaseModel):
-    github_url:   str
-    project_name: str
+class QueryResponse(BaseModel):
+    question: str
+    answer: str
+    sources: List[str]
+    metrics: dict
+    success: bool
 
+retriever = None
+chunk_count = 0
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+def load_retriever():
+    global chunk_count
+    try:
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        vectorstore = Chroma(
+            persist_directory=CHROMA_PATH,
+            embedding_function=embeddings,
+            collection_name="devmind_code",
+        )
+        chunk_count = vectorstore._collection.count()
+        print(f"✅ Retriever loaded with {chunk_count} chunks")
+        return vectorstore.as_retriever(search_kwargs={"k": TOP_K})
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return None
+
+@app.on_event("startup")
+async def startup_event():
+    global retriever
+    print("🚀 Starting DevMind API...")
+    retriever = load_retriever()
+
+@app.post("/query", response_model=QueryResponse)
+async def query(request: QueryRequest):
+    if retriever is None:
+        raise HTTPException(status_code=503, detail="Retriever not loaded")
+    
+    try:
+        retrieval_start = time.time()
+        docs = retriever.invoke(request.question)
+        retrieval_time = time.time() - retrieval_start
+
+        sources = []
+        context_parts = []
+        for doc in docs:
+            source_file = doc.metadata.get("source_file", "unknown")
+            if source_file not in sources:
+                sources.append(source_file)
+            context_parts.append(f"[{source_file}]\n{doc.page_content}")
+
+        context = "\n\n---\n\n".join(context_parts)
+
+        generation_start = time.time()
+        llm = ChatGroq(model=request.model, temperature=0)
+        prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT)
+        chain = prompt | llm
+
+        result = chain.invoke({
+            "question": request.question,
+            "context": context
+        })
+
+        generation_time = time.time() - generation_start
+        total_time = retrieval_time + generation_time
+
+        return QueryResponse(
+            question=request.question,
+            answer=result.content,
+            sources=sources,
+            metrics={
+                "retrieval_time": round(retrieval_time, 2),
+                "generation_time": round(generation_time, 2),
+                "total_time": round(total_time, 2),
+                "chunks_used": len(docs),
+                "model": request.model
+            },
+            success=True
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy" if retriever else "degraded",
+        "chunks_indexed": chunk_count,
+    }
 
 @app.get("/")
-def serve_ui():
-    return FileResponse("api/index.html")
+async def root():
+    return FileResponse("public/index.html")
 
+app.mount("/static", StaticFiles(directory="public"), name="static")
 
-@app.get("/projects")
-def get_projects():
-    return {
-        "projects": [
-            {"name": k, "status": indexing_status.get(k, "ready")}
-            for k in retrievers.keys()
-        ]
-    }
-
-
-@app.get("/status/{project_name}")
-def get_status(project_name: str):
-    return {
-        "project": project_name,
-        "status":  indexing_status.get(project_name, "not_found")
-    }
-
-
-@app.post("/add-codebase")
-def add_codebase(req: AddRepoRequest, background_tasks: BackgroundTasks):
-    name = req.project_name.lower().replace(" ", "_")
-    if name in retrievers:
-        return {"message": f"{name} already exists", "project": name}
-    indexing_status[name] = "queued"
-    background_tasks.add_task(index_repo, req.github_url, name)
-    return {"message": f"Indexing {name} started", "project": name}
-
-
-@app.post("/query")
-@observe(name="devmind-query")
-def query(req: QueryRequest):
-    question = req.question.strip()
-    project  = req.project
-    intent   = detect_intent(question)
-
-    langfuse_context.update_current_trace(
-        metadata={"project": project, "intent": intent}
-    )
-
-    # 1. Greeting → direct LLM
-    if intent == "greeting":
-        llm    = ChatGroq(model="llama-3.1-8b-instant", temperature=0.7)
-        answer = llm.invoke(
-        "You are DevMind, a code assistant. "
-        "The user said: " + question +
-        ". Reply in 1-2 short friendly sentences only. Ask what codebase they need help with."
-        ).content
-        langfuse.flush()
-        return {
-            "answer":  answer,
-            "sources": [],
-            "metrics": {"mode": "greeting", "retrieval_time": 0,
-                       "generation_time": 0, "total_time": 0, "chunks_used": 0}
-        }
-
-    # 2. General → LLM fallback
-    if intent == "general":
-        t0     = time.time()
-        llm    = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-        answer = llm.invoke(question).content
-        total  = round(time.time() - t0, 2)
-        langfuse.flush()
-        return {
-            "answer":  answer,
-            "sources": ["general_knowledge"],
-            "metrics": {"mode": "fallback", "retrieval_time": 0,
-                       "generation_time": total, "total_time": total, "chunks_used": 0}
-        }
-
-    # 3. RAG → full pipeline
-    if project not in retrievers:
-        return {
-            "answer":  f"Project '{project}' not found or still indexing.",
-            "sources": [],
-            "metrics": {"mode": "error", "retrieval_time": 0,
-                       "generation_time": 0, "total_time": 0, "chunks_used": 0}
-        }
-
-    t0   = time.time()
-    docs = retrievers[project].invoke(question)[:TOP_K_FINAL]
-    retrieval_time = round(time.time() - t0, 2)
-
-    cited_files   = []
-    context_parts = []
-    for doc in docs:
-        source = doc.metadata.get("source_file", "unknown")
-        if source not in cited_files:
-            cited_files.append(source)
-        context_parts.append(f"[{source}]\n{doc.page_content}")
-    context = "\n\n---\n\n".join(context_parts)
-
-    t1      = time.time()
-    llm     = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-    full_prompt = SYSTEM_PROMPT.format(context=context) + f"\nQuestion: {question}\nAnswer:"
-    answer  = llm.invoke(full_prompt).content
-    generation_time = round(time.time() - t1, 2)
-
-    langfuse.flush()
-
-    return {
-        "answer":  answer,
-        "sources": cited_files,
-        "metrics": {
-            "mode":            "rag",
-            "retrieval_time":  retrieval_time,
-            "generation_time": generation_time,
-            "total_time":      round(retrieval_time + generation_time, 2),
-            "chunks_used":     len(docs)
-        }
-    }
-
-
-app.mount("/static", StaticFiles(directory="api"), name="static")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
