@@ -12,3 +12,4 @@ chromadb
 huggingface-hub
 requests
 sentence-transformers
+sentence-transformers
