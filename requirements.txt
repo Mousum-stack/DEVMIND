@@ -2,8 +2,8 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 python-dotenv==1.0.0
-langchain==0.0.352
-langchain-huggingface==0.0.26
+langchain==0.1.0
+langchain-huggingface==0.0.1
 langchain-chroma==0.1.0
 langchain-groq==0.1.1
 langfuse==2.25.4
