@@ -1,0 +1,40 @@
+{
+  "results": [
+    {
+      "question": "How does the checkout process work?",
+      "answer": "I don't have enough context to provide a detailed answer about the checkout process. However, I can suggest that you may need to refer to the Razorpay documentation for more information.\n\nIf you're looking for a high-level overview, here are some general steps:\n\n* The customer initiates a payment by providing their payment details (e.g., card number, expiration date, CVV).\n* The payment details are sent to the Razorpay server for processing.\n* Razorpay verifies the payment details and generates a payment link.\n* The payment link is sent back to the customer's browser, where they can complete the payment.\n* Once the payment is complete, the payment status is updated in the Razorpay system.\n\nPlease note that this is a simplified overview, and the actual checkout process may involve additional steps and complexities.\n\nIf you need more information, I recommend checking the Razorpay documentation, specifically the [Razorpay Checkout](https://docs.razorpay.com/docs/payments/checkout) section.",
+      "faithfulness": 0.6000000000000001,
+      "relevancy": 0.8,
+      "response_time": 1.41,
+      "chunks": 5
+    },
+    {
+      "question": "What are the available API endpoints?",
+      "answer": "Based on the provided context, here are the available API endpoints for Razorpay:\n\n* Payment Link end point API\n* Payment page entity API\n* Webhook entity API\n\nThese endpoints are mentioned in the CHANGELOG.md file of the razorpay-php repository.\n\nSource: [razorpay-php/CHANGELOG.md]",
+      "faithfulness": 0.8999999999999999,
+      "relevancy": 1.0,
+      "response_time": 0.62,
+      "chunks": 5
+    },
+    {
+      "question": "How to handle errors in requests?",
+      "answer": "I don't have enough context to answer your question about handling errors in requests. However, I can suggest that you may want to look at the `PSR7-Interfaces.md` file, which provides information about the HTTP message interfaces, including methods for handling errors.\n\nFor example, you can use the `withStatus($statusCode)` method to set the HTTP status code of the request, and the `withReasonPhrase($reasonPhrase)` method to set the reason phrase of the request.\n\n```php\nuse Psr\\Http\\Message\\ResponseInterface;\n\n$response = $response->withStatus(404);\n$response = $response->withReasonPhrase('Not Found');\n```\n\nYou can also use the `getStatusCode()` method to get the HTTP status code of the request, and the `getReasonPhrase()` method to get the reason phrase of the request.\n\n```php\nuse Psr\\Http\\Message\\ResponseInterface;\n\n$status = $response->getStatusCode();\n$reason = $response->getReasonPhrase();\n```",
+      "faithfulness": 0.5,
+      "relevancy": 0.8,
+      "response_time": 0.73,
+      "chunks": 5
+    },
+    {
+      "question": "What dependencies are required?",
+      "answer": "* PHP `^5.6 || ~7.0.0 || ~7.1.0 || ~7.2.0` is required.\n* PHP `mbstring` and `gd` extensions have to be loaded.\n* Additional extensions may be required for some advanced features:\n  * `zlib` for compression of output and embedded resources.\n  * `bcmath` for generating barcodes.\n  * `xml` for character set conversion and SVG handling.\n\n[admin/inc/mpdf/vendor/mpdf/mpdf/README.md]\n[admin/inc/mpdf/vendor/mpdf/mpdf/CHANGELOG.md]",
+      "faithfulness": 0.8999999999999999,
+      "relevancy": 1.0,
+      "response_time": 4.9,
+      "chunks": 5
+    }
+  ],
+  "avg_faithfulness": 0.725,
+  "avg_relevancy": 0.9,
+  "avg_response_time": 1.915,
+  "total_queries": 4
+}
