@@ -64,7 +64,7 @@ def evaluate_queries() -> Dict:
             response = requests.post(
                 f"{API_URL}/query",
                 json={"project": PROJECT, "question": question},
-                timeout=10
+                timeout=30
             )
             if response.status_code == 200:
                 data = response.json()

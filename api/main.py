@@ -21,6 +21,7 @@ from langfuse.decorators import observe, langfuse_context
 from langfuse import Langfuse
 
 load_dotenv()
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 langfuse = Langfuse(
     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
@@ -30,10 +31,11 @@ langfuse = Langfuse(
 
 app = FastAPI()
 TOP_K_FINAL = 5
+
 SYSTEM_PROMPT = """You are DevMind, an expert code assistant.
 
 RULES:
-- ALWAYS answer in English only.
+- ALWAYS answer in English only. Never answer in French, German, or any other language.
 - Use ONLY the provided context to answer.
 - Cite source file after every fact using [filename].
 - Keep answers SHORT and CONCISE — maximum 5-6 bullet points.
@@ -46,10 +48,27 @@ Context:
 """
 
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 retrievers = {}
 indexing_status = {}
 
+# ── Intent Detection ──────────────────────────────────────────────────────────
+
+GREETINGS = ["hi", "hello", "hey", "hii", "howdy", "sup",
+             "what's up", "good morning", "good evening", "good afternoon",
+             "namaste", "hola", "hi there", "hello there"]
+
+def detect_intent(question: str) -> str:
+    q = question.lower().strip()
+    # Check greeting
+    for g in GREETINGS:
+        if q == g or q.startswith(g + " ") or q.startswith(g + "!") or q.startswith(g + ","):
+            return "greeting"
+    # Short general question
+    if len(q.split()) <= 3 and not any(c in q for c in ["(", ".", "_", "/"]):
+        return "general"
+    return "rag"
+
+# ── Retriever ─────────────────────────────────────────────────────────────────
 
 def load_retriever(project_name: str, db_path: str):
     if not Path(db_path).exists():
@@ -89,14 +108,12 @@ def index_repo(github_url: str, project_name: str):
     try:
         indexing_status[project_name] = "cloning"
         clone_path = f"./data/{project_name}_source"
-        db_path = f"./data/{project_name}_db"
-
+        db_path    = f"./data/{project_name}_db"
         if not Path(clone_path).exists():
             subprocess.run(
                 ["git", "clone", "--depth=1", github_url, clone_path],
                 check=True, capture_output=True
             )
-
         indexing_status[project_name] = "indexing"
         repo = Path(clone_path)
         docs = []
@@ -107,15 +124,12 @@ def index_repo(github_url: str, project_name: str):
                     d = loader.load()
                     for doc in d:
                         doc.metadata["source_file"] = str(f.relative_to(repo))
-                        doc.metadata["project"] = project_name
+                        doc.metadata["project"]     = project_name
                     docs.extend(d)
                 except:
                     pass
-
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=150
-        )
-        chunks = splitter.split_documents(docs)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+        chunks   = splitter.split_documents(docs)
         Chroma.from_documents(
             chunks, embeddings,
             persist_directory=db_path,
@@ -125,11 +139,10 @@ def index_repo(github_url: str, project_name: str):
         if r:
             retrievers[project_name] = r
         indexing_status[project_name] = "ready"
-        print(f"Done indexing {project_name} — {len(chunks)} chunks")
-
+        print(f"Done {project_name} — {len(chunks)} chunks")
     except Exception as e:
         indexing_status[project_name] = f"error: {str(e)}"
-        print(f"Error indexing {project_name}: {e}")
+        print(f"Error: {e}")
 
 
 print("Loading existing projects...")
@@ -137,22 +150,25 @@ data_dir = Path("./data")
 for item in data_dir.iterdir():
     if item.is_dir() and item.name.endswith("_db"):
         name = item.name.replace("_db", "")
-        r = load_retriever(name, str(item))
+        r    = load_retriever(name, str(item))
         if r:
-            retrievers[name] = r
+            retrievers[name]      = r
             indexing_status[name] = "ready"
 print(f"Loaded: {list(retrievers.keys())}")
 
 
+# ── Models ────────────────────────────────────────────────────────────────────
+
 class QueryRequest(BaseModel):
     question: str
-    project: str = "chroma"
-
+    project:  str = "chroma"
 
 class AddRepoRequest(BaseModel):
-    github_url: str
+    github_url:   str
     project_name: str
 
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 def serve_ui():
@@ -171,7 +187,10 @@ def get_projects():
 
 @app.get("/status/{project_name}")
 def get_status(project_name: str):
-    return {"project": project_name, "status": indexing_status.get(project_name, "not_found")}
+    return {
+        "project": project_name,
+        "status":  indexing_status.get(project_name, "not_found")
+    }
 
 
 @app.post("/add-codebase")
@@ -184,45 +203,77 @@ def add_codebase(req: AddRepoRequest, background_tasks: BackgroundTasks):
     return {"message": f"Indexing {name} started", "project": name}
 
 
-@observe()
-def run_retrieval(project: str, question: str):
-    docs = retrievers[project].invoke(question)
-    docs = docs[:TOP_K_FINAL]
-    langfuse_context.update_current_observation(
-        metadata={"project": project, "chunks_returned": len(docs)}
-    )
-    return docs
-
-
-@observe()
-def run_generation(question: str, context: str):
-    full_prompt = SYSTEM_PROMPT.format(context=context) + f"\nQuestion: {question}\nAnswer:"
-    response = llm.invoke(full_prompt)
-    langfuse_context.update_current_observation(
-        input=question,
-        output=response.content,
-        metadata={"model": "llama-3.1-8b-instant"}
-    )
-    return response.content
-
-
 @app.post("/query")
 @observe(name="devmind-query")
 def query(req: QueryRequest):
-    project = req.project
-    if project not in retrievers:
-        return {"answer": f"Project '{project}' not found.", "sources": [], "metrics": {}}
+    question = req.question.strip()
+    project  = req.project
+    intent   = detect_intent(question)
 
     langfuse_context.update_current_trace(
-    name="devmind-query",
-    metadata={"project": project, "question": req.question}
+        metadata={"project": project, "intent": intent}
     )
 
-    t0 = time.time()
-    docs = run_retrieval(project, req.question)
+    # 1. Greeting → direct LLM, no RAG
+    if intent == "greeting":
+        llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.7)
+        answer = llm.invoke(
+            "You are DevMind, a friendly AI code assistant. "
+            "The user greeted you with: '" + question + "'. "
+            "Reply in 1-2 short friendly sentences only. "
+            "Introduce yourself as DevMind and ask what codebase they need help with."
+        ).content
+        langfuse.flush()
+        return {
+            "answer":  answer,
+            "sources": [],
+            "metrics": {
+                "mode": "greeting",
+                "retrieval_time":  0,
+                "generation_time": 0,
+                "total_time":      0,
+                "chunks_used":     0
+            }
+        }
+
+    # 2. General → LLM fallback, no RAG
+    if intent == "general":
+        t0  = time.time()
+        llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
+        answer = llm.invoke(question).content
+        total  = round(time.time() - t0, 2)
+        langfuse.flush()
+        return {
+            "answer":  answer,
+            "sources": ["general_knowledge"],
+            "metrics": {
+                "mode":            "fallback",
+                "retrieval_time":  0,
+                "generation_time": total,
+                "total_time":      total,
+                "chunks_used":     0
+            }
+        }
+
+    # 3. RAG → full pipeline
+    if project not in retrievers:
+        return {
+            "answer":  f"Project '{project}' not found or still indexing.",
+            "sources": [],
+            "metrics": {
+                "mode": "error",
+                "retrieval_time":  0,
+                "generation_time": 0,
+                "total_time":      0,
+                "chunks_used":     0
+            }
+        }
+
+    t0             = time.time()
+    docs           = retrievers[project].invoke(question)[:TOP_K_FINAL]
     retrieval_time = round(time.time() - t0, 2)
 
-    cited_files = []
+    cited_files   = []
     context_parts = []
     for doc in docs:
         source = doc.metadata.get("source_file", "unknown")
@@ -231,23 +282,23 @@ def query(req: QueryRequest):
         context_parts.append(f"[{source}]\n{doc.page_content}")
     context = "\n\n---\n\n".join(context_parts)
 
-    t1 = time.time()
-    answer = run_generation(req.question, context)
+    t1          = time.time()
+    llm         = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
+    full_prompt = SYSTEM_PROMPT.format(context=context) + f"\nQuestion: {question}\nAnswer:"
+    answer      = llm.invoke(full_prompt).content
     generation_time = round(time.time() - t1, 2)
 
-    langfuse_context.update_current_trace(
-    metadata={"answer_length": len(answer)}
-    )
     langfuse.flush()
 
     return {
-        "answer": answer,
+        "answer":  answer,
         "sources": cited_files,
         "metrics": {
-            "retrieval_time": retrieval_time,
+            "mode":            "rag",
+            "retrieval_time":  retrieval_time,
             "generation_time": generation_time,
-            "total_time": round(retrieval_time + generation_time, 2),
-            "chunks_used": len(docs)
+            "total_time":      round(retrieval_time + generation_time, 2),
+            "chunks_used":     len(docs)
         }
     }
 

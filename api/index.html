@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DevMind</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -47,6 +48,14 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 .avatar{width:28px;height:28px;border-radius:50%;background:#eef;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#667eea;flex-shrink:0;margin-top:2px;}
 .ai-body{flex:1;min-width:0;}
 .a-bubble{background:white;padding:10px 14px;border-radius:12px;border-bottom-left-radius:3px;font-size:13px;line-height:1.6;color:#333;border:1px solid #eee;}
+.a-bubble h1,.a-bubble h2,.a-bubble h3{font-size:14px;font-weight:600;margin:8px 0 4px;color:#333;}
+.a-bubble ul,.a-bubble ol{padding-left:18px;margin:6px 0;}
+.a-bubble li{margin-bottom:4px;}
+.a-bubble code{background:#f5f5f5;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace;}
+.a-bubble pre{background:#1e2530;padding:10px;border-radius:8px;overflow-x:auto;margin:8px 0;}
+.a-bubble pre code{background:transparent;color:#e2e8f0;font-size:12px;}
+.a-bubble p{margin-bottom:6px;}
+.a-bubble strong{font-weight:600;}
 .metrics{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
 .pill{font-size:11px;padding:3px 8px;border-radius:20px;background:#f5f5f5;border:1px solid #eee;color:#666;}
 .sources{margin-top:6px;font-size:11px;color:#999;}
@@ -72,8 +81,6 @@ body{font-family:system-ui;background:#f5f5f5;height:100vh;display:flex;}
 .modal-cancel{padding:8px 16px;border:1px solid #ddd;border-radius:8px;font-size:13px;cursor:pointer;background:white;}
 .modal-add{padding:8px 16px;background:#667eea;color:white;border:none;border-radius:8px;font-size:13px;cursor:pointer;}
 .status-msg{font-size:12px;color:#667eea;margin-top:6px;min-height:18px;}
-.chat-session{display:none;}
-.chat-session.active{display:flex;flex-direction:column;gap:12px;}
 </style>
 </head>
 <body>
@@ -179,9 +186,20 @@ function renderChat(){
       const d=document.createElement('div');
       d.className='msg-ai';
       let m='',s='';
-      if(msg.metrics && msg.metrics.total_time > 0)m=`<div class="metrics"><span class="pill">retrieval ${msg.metrics.retrieval_time}s</span><span class="pill">generation ${msg.metrics.generation_time}s</span><span class="pill">total ${msg.metrics.total_time}s</span><span class="pill">${msg.metrics.chunks_used} chunks</span></div>`;
-      if(msg.sources&&msg.sources.length)s=`<div class="sources">Sources: ${[...new Set(msg.sources.map(x=>x.split('/').pop()))].map(x=>`<span class="stag">${x}</span>`).join('')}</div>`;
-      d.innerHTML=`<div class="avatar">DM</div><div class="ai-body"><div class="a-bubble">${typeof marked!=='undefined'?marked.parse(msg.answer):msg.answer}</div>${m}${s}</div>`;
+      if(msg.metrics && msg.metrics.total_time > 0){
+        m=`<div class="metrics">
+          <span class="pill">retrieval ${msg.metrics.retrieval_time}s</span>
+          <span class="pill">generation ${msg.metrics.generation_time}s</span>
+          <span class="pill">total ${msg.metrics.total_time}s</span>
+          <span class="pill">${msg.metrics.chunks_used} chunks</span>
+        </div>`;
+      }
+      if(msg.sources && msg.sources.length && !msg.sources.includes('general_knowledge')){
+        const uniqueSources=[...new Set(msg.sources.map(x=>x.split('/').pop()))];
+        s=`<div class="sources">Sources: ${uniqueSources.map(x=>`<span class="stag">${x}</span>`).join('')}</div>`;
+      }
+      const parsedAnswer = typeof marked !== 'undefined' ? marked.parse(msg.answer) : msg.answer;
+      d.innerHTML=`<div class="avatar">DM</div><div class="ai-body"><div class="a-bubble">${parsedAnswer}</div>${m}${s}</div>`;
       chat.appendChild(d);
     }
   });
@@ -196,7 +214,7 @@ function refreshHistory(){
     d.className='h-item'+(s.id===currentSessionId?' active':'');
     d.onclick=()=>loadSession(s.id);
     const t=s.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    d.innerHTML=`<div class="h-q">${s.title}</div><div class="h-t">${currentProject} • ${t}</div>`;
+    d.innerHTML=`<div class="h-q">${s.title}</div><div class="h-t">${currentProject||'devmind'} • ${t}</div>`;
     hist.appendChild(d);
   });
 }
@@ -280,11 +298,10 @@ async function ask(){
   const qi=document.getElementById('qi');
   const q=qi.value.trim();
   if(!q)return;
-  if(!currentProject){alert('Please select a project first!');return;}
   if(!currentSessionId)newChat();
   qi.value='';
-  document.getElementById('empty')?.remove();
   document.getElementById('askbtn').textContent='...';
+  document.getElementById('empty')?.remove();
 
   sessions[currentSessionId].messages.push({type:'user',text:q});
   if(sessions[currentSessionId].title==='New chat')sessions[currentSessionId].title=q.slice(0,40);
@@ -293,10 +310,19 @@ async function ask(){
   addThinking();
 
   try{
-    const res=await fetch('/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,project:currentProject})});
+    const res=await fetch('/query',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question:q,project:currentProject||'chroma'})
+    });
     const d=await res.json();
     removeThinking();
-    sessions[currentSessionId].messages.push({type:'ai',answer:d.answer,metrics:d.metrics,sources:d.sources});
+    sessions[currentSessionId].messages.push({
+      type:'ai',
+      answer:d.answer,
+      metrics:d.metrics,
+      sources:d.sources
+    });
     renderChat();
     refreshHistory();
   }catch(e){
